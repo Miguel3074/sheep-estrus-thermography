@@ -2,3 +2,7 @@
 venv/
 __pycache__/
 data/
+exiftool_dist/
+Dados/
+outputs/
+planilha/backups/
