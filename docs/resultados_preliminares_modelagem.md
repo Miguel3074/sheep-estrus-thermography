@@ -51,6 +51,24 @@ Os dois registros excluídos da coorte comum possuem ROI `11 x 11`, mas não
 comportam a janela `15 x 15`. Usar a coorte comum mantém idênticas as amostras
 comparadas.
 
+## Auditoria das datas
+
+Foram encontrados 137 registros com anos entre 2026 e 2033. Eles aparecem em
+sequência nos dias 17 e 21–28 de fevereiro, dentro do mesmo lote e entre
+fotografias consecutivas da coleta de 2025. O padrão é compatível com
+incremento automático ou erro de preenchimento do ano.
+
+O CSV original não foi modificado. Para a análise temporal, o script cria:
+
+- `collection_date_original`, com o texto recebido;
+- `collection_date`, preservando dia e mês e usando provisoriamente o ano
+  informado por `--collection-year 2025`;
+- `date_year_corrected`, indicador explícito da correção;
+- `date_audit.csv`, com contagens por data original e analítica.
+
+Depois da normalização existem 24 datas de coleta. A atribuição de 2025 deve
+ser confirmada com os responsáveis pela coleta antes da análise final.
+
 ## Validação
 
 Foram realizadas cinco repetições de validação cruzada com cinco folds,
@@ -67,6 +85,20 @@ O grupo foi o identificador da ovelha. As 25 divisões foram verificadas:
 Foram avaliados regressão logística balanceada, SVM RBF balanceada e
 `Random Forest` balanceada. Imputação pela mediana e padronização foram
 ajustadas somente com os dados de treino de cada fold.
+
+Uma segunda análise repetiu o protocolo usando a data normalizada como grupo.
+Nesse caso, nenhuma data aparece simultaneamente no treino e no teste. Os
+animais podem aparecer nos dois conjuntos, pois quase todos foram acompanhados
+em várias datas. Assim, as duas análises respondem perguntas diferentes:
+
+- agrupamento por animal: desempenho em animais ainda não vistos;
+- agrupamento por data: desempenho em um novo dia para animais potencialmente
+  já conhecidos.
+
+Com esta coleta não é possível bloquear simultaneamente todos os animais e
+todas as datas sem perder praticamente toda a amostra conectada. Uma coleta
+externa continua sendo necessária para testar as duas generalizações ao mesmo
+tempo.
 
 ## Representações
 
@@ -149,24 +181,77 @@ temperatura ambiente pode funcionar como marcador indireto de data ou etapa do
 protocolo. O resultado final deve analisar explicitamente data, lote e
 protocolo e, se possível, usar uma coleta independente.
 
+## Validação agrupada por data
+
+Resultados médios nos 25 folds temporais:
+
+| Representação | Modelo | PR-AUC | ROC-AUC | F1 | Sens. | Espec. |
+|---|---|---:|---:|---:|---:|---:|
+| Ambiente | Logística | 0,138 | 0,621 | 0,231 | 0,577 | 0,663 |
+| POI radiométrico | Logística | 0,212 | 0,618 | 0,191 | 0,541 | 0,630 |
+| ROI `11 x 11` | Logística | 0,189 | 0,603 | 0,203 | 0,570 | 0,634 |
+| ROI `11 x 11` | Random Forest | 0,148 | 0,580 | 0,076 | 0,064 | 0,973 |
+| ROI `11 x 11` | SVM RBF | 0,179 | 0,625 | 0,203 | 0,479 | 0,694 |
+| ROI `15 x 15` | Logística | 0,187 | 0,612 | 0,204 | 0,536 | 0,653 |
+| ROI `15 x 15` | SVM RBF | 0,179 | 0,635 | 0,217 | 0,504 | 0,700 |
+
+A regressão logística com POI radiométrico apresentou a maior PR-AUC média
+temporal, enquanto a SVM com ROI `15 x 15` apresentou a maior ROC-AUC. Como
+essas combinações foram identificadas no mesmo conjunto usado para comparação,
+elas são hipóteses exploratórias, não modelos finais selecionados.
+
+Na ROI principal `11 x 11`, a SVM foi melhor que a regressão logística em
+ROC-AUC na validação por animal (`0,665` contra `0,620`), mas a diferença caiu
+na validação por data (`0,625` contra `0,603`). A Random Forest apresentou
+sensibilidade muito baixa e não é recomendada como candidata principal nesta
+configuração.
+
+No bootstrap de 500 reamostragens por data, a diferença da ROI `11 x 11`
+contra o modelo ambiental foi:
+
+| Métrica | Diferença observada | Faixa bootstrap 2,5%–97,5% |
+|---|---:|---:|
+| PR-AUC | +0,008 | -0,023 a +0,048 |
+| ROC-AUC | -0,027 | -0,099 a +0,027 |
+
+As duas faixas incluem zero. Portanto, quando datas inteiras são bloqueadas, a
+ROI principal ainda não demonstra ganho robusto sobre a temperatura ambiente.
+
 ## Reprodução
+
+Validação por animal:
 
 ```powershell
 .\venv\Scripts\python.exe src/modelar_estro.py `
+  --group-by animal `
   --folds 5 `
   --repeats 5 `
   --rf-estimators 100 `
   --bootstrap-iterations 500
 ```
 
-Os parâmetros, folds, métricas, predições e comparações bootstrap ficam em
-`outputs/modeling_grouped/`.
+Validação por data:
+
+```powershell
+.\venv\Scripts\python.exe src/modelar_estro.py `
+  --group-by date `
+  --collection-year 2025 `
+  --folds 5 `
+  --repeats 5 `
+  --rf-estimators 100 `
+  --bootstrap-iterations 500 `
+  --output-dir outputs/modeling_grouped_date
+```
+
+Os parâmetros, folds, métricas, predições, auditoria das datas e comparações
+bootstrap ficam nos respectivos diretórios de saída.
 
 ## Próximos passos
 
 1. confirmar a semântica dos vazios em `Monta`;
 2. marcar os 61 POIs disponíveis e obter `FLIR1107`;
-3. regenerar todas as ROIs e repetir exatamente o protocolo;
-4. avaliar um bloqueio temporal ou uma coleta externa;
-5. manter `11 x 11` como análise principal e `15 x 15` como hipótese de
+3. confirmar o ano verdadeiro dos 137 registros sinalizados;
+4. regenerar todas as ROIs e repetir exatamente os dois bloqueios;
+5. obter uma coleta externa;
+6. manter `11 x 11` como análise principal e `15 x 15` como hipótese de
    sensibilidade até existir validação independente.

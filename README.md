@@ -148,6 +148,7 @@ Execução reproduzida:
 
 ```powershell
 .\venv\Scripts\python.exe src/modelar_estro.py `
+  --group-by animal `
   --folds 5 `
   --repeats 5 `
   --rf-estimators 100 `
@@ -175,6 +176,35 @@ outras escalas. A janela `15 x 15` apresentou um sinal exploratório favorável
 na regressão logística, porém não deve substituir retrospectivamente a análise
 principal usando o mesmo teste.
 
+Também foi executada uma validação agrupada por data. A auditoria encontrou
+137 registros de fevereiro com anos incrementais entre 2026 e 2033. O padrão
+dos dias, das fotografias e do lote indica erro de preenchimento; por isso o
+pipeline preserva o CSV original e normaliza apenas o ano da cópia analítica
+para 2025. Essa hipótese ainda deve ser confirmada com os responsáveis pela
+coleta.
+
+```powershell
+.\venv\Scripts\python.exe src/modelar_estro.py `
+  --group-by date `
+  --collection-year 2025 `
+  --folds 5 `
+  --repeats 5 `
+  --rf-estimators 100 `
+  --bootstrap-iterations 500 `
+  --output-dir outputs/modeling_grouped_date
+```
+
+Após a normalização existem 24 datas. Na validação temporal, a ROI principal
+`11 x 11` obteve PR-AUC `0,189` e ROC-AUC `0,603` com regressão logística. A
+SVM obteve PR-AUC `0,179` e ROC-AUC `0,625`; a `Random Forest`, PR-AUC `0,148`
+e ROC-AUC `0,580`. O POI radiométrico com regressão logística teve a maior
+PR-AUC média (`0,212`), mas esse resultado é exploratório.
+
+Quando o bootstrap foi agrupado por data, a diferença da ROI `11 x 11` contra
+o modelo somente ambiental foi `+0,008` em PR-AUC, com faixa de
+`-0,023` a `+0,048`. Portanto, o ganho térmico não se manteve conclusivo ao
+bloquear datas inteiras.
+
 Saídas em `outputs/modeling_grouped/`:
 
 - `summary_metrics.csv`: médias, desvios e quantis dos 25 folds;
@@ -186,22 +216,28 @@ Saídas em `outputs/modeling_grouped/`:
 - `primary_oof_diagnostics.png`: curvas ROC/PR e matriz de confusão;
 - `feature_set_comparison.png`: comparação visual das representações.
 
+As saídas equivalentes da validação temporal ficam em
+`outputs/modeling_grouped_date/`, incluindo `date_audit.csv`, que documenta
+cada data original e sua versão analítica.
+
 ## Testes
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Os 13 testes cobrem centralização e limites das janelas fixas, conectividade e
+Os 16 testes cobrem centralização e limites das janelas fixas, conectividade e
 limite espacial do crescimento por semente, cálculo dos atributos térmicos,
-recuperação segura, auditoria das anotações e preparação dos rótulos.
+recuperação segura, auditoria das anotações, preparação dos rótulos,
+normalização auditável das datas e ausência de vazamento entre datas.
 
 ## Próximas etapas
 
 1. marcar manualmente os 61 POIs disponíveis;
 2. localizar ou solicitar novamente a fotografia `FLIR1107`;
 3. confirmar se célula vazia em `Monta` significa observação negativa;
-4. regenerar as ROIs e repetir a validação depois da revisão;
-5. investigar a influência de data/protocolo, pois o modelo somente ambiental
-   também apresentou desempenho acima do acaso;
-6. congelar a especificação final antes de qualquer teste independente.
+4. confirmar que os anos 2026–2033 são erros de preenchimento e que o ano
+   correto da coleta é 2025;
+5. regenerar as ROIs e repetir as duas validações depois da revisão;
+6. obter uma coleta independente ou um novo período de coleta;
+7. congelar a especificação final antes do teste independente.

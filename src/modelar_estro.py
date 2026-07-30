@@ -1,6 +1,7 @@
-"""Modelagem preliminar do estro com validação estratificada por animal.
+"""Modelagem preliminar do estro com validação estratificada e agrupada.
 
-O conjunto de teste nunca contém imagens de animais presentes no treino.
+O conjunto de teste nunca compartilha com o treino a unidade escolhida em
+``--group-by``: animal ou data de coleta normalizada.
 A análise principal é a combinação ``fixed_11 + logistic_regression``; os
 demais métodos são comparações e análises de sensibilidade pré-especificadas.
 
@@ -34,6 +35,10 @@ DEFAULT_INPUT = (
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "modeling_grouped"
 PRIMARY_FEATURE_SET = "fixed_11"
 PRIMARY_MODEL = "logistic_regression"
+VALIDATION_GROUP_COLUMNS = {
+    "animal": "animal_group",
+    "date": "collection_date",
+}
 
 
 FEATURE_SETS: dict[str, tuple[str, ...]] = {
@@ -107,10 +112,47 @@ def encode_monta(series: pd.Series) -> pd.Series:
     return encoded.astype("int8")
 
 
+def normalize_collection_dates(
+    series: pd.Series,
+    *,
+    collection_year: int = 2025,
+) -> tuple[pd.Series, pd.Series]:
+    """Normaliza o ano da coleta sem alterar a planilha original.
+
+    A planilha contém uma sequência evidente de anos incrementais entre 2026
+    e 2033 em fotografias consecutivas de fevereiro. O dia e o mês são
+    preservados, e somente o ano é corrigido na cópia analítica.
+    """
+
+    original = series.astype("string").str.strip()
+    parsed = pd.to_datetime(
+        original,
+        format="%d.%m.%Y",
+        errors="coerce",
+    )
+    invalid = parsed.isna()
+    if invalid.any():
+        values = sorted(original.loc[invalid].dropna().unique().tolist())
+        raise ValueError(
+            "Datas de coleta inválidas: " + ", ".join(values)
+        )
+
+    corrected = parsed.dt.year.ne(collection_year)
+    normalized = pd.to_datetime(
+        parsed.dt.strftime(f"%d.%m.{collection_year}"),
+        format="%d.%m.%Y",
+        errors="raise",
+    )
+    return normalized.dt.strftime("%Y-%m-%d"), corrected.astype(bool)
+
+
 def prepare_dataset(
     dataframe: pd.DataFrame,
+    *,
+    collection_year: int = 2025,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     required = {
+        "Data",
         "id",
         "Monta",
         "fixed_15_available",
@@ -133,6 +175,16 @@ def prepare_dataset(
         prepared["id"]
         .astype("string")
         .str.replace(r"\.0$", "", regex=True)
+    )
+    prepared["collection_date_original"] = (
+        prepared["Data"].astype("string").str.strip()
+    )
+    (
+        prepared["collection_date"],
+        prepared["date_year_corrected"],
+    ) = normalize_collection_dates(
+        prepared["Data"],
+        collection_year=collection_year,
     )
     prepared["field_spot_temperature"] = parse_locale_numeric(
         prepared["Termograma "]
@@ -166,6 +218,24 @@ def prepare_dataset(
         "animals": int(common["animal_group"].nunique()),
         "animals_with_positive": int(
             common.loc[common["target_monta"] == 1, "animal_group"].nunique()
+        ),
+        "collection_year_assumed": int(collection_year),
+        "original_date_years": ",".join(
+            sorted(
+                pd.to_datetime(
+                    common["collection_date_original"],
+                    format="%d.%m.%Y",
+                )
+                .dt.year.astype(str)
+                .unique()
+                .tolist()
+            )
+        ),
+        "date_year_corrected_records": int(
+            common["date_year_corrected"].sum()
+        ),
+        "normalized_collection_dates": int(
+            common["collection_date"].nunique()
         ),
         "label_policy": "Monta=true -> 1; Monta vazia -> 0 (provisório)",
         "primary_feature_set": PRIMARY_FEATURE_SET,
@@ -282,11 +352,25 @@ def make_splits(
     folds: int,
     repeats: int,
     seed: int,
+    group_by: str = "animal",
 ) -> list[tuple[int, int, np.ndarray, np.ndarray]]:
     from sklearn.model_selection import StratifiedGroupKFold
 
+    if group_by not in VALIDATION_GROUP_COLUMNS:
+        raise ValueError(
+            "Agrupamento inválido: "
+            f"{group_by}. Use uma de: {', '.join(VALIDATION_GROUP_COLUMNS)}."
+        )
+
     target = dataframe["target_monta"].to_numpy()
-    groups = dataframe["animal_group"].to_numpy()
+    group_column = VALIDATION_GROUP_COLUMNS[group_by]
+    groups = dataframe[group_column].to_numpy()
+    unique_groups = np.unique(groups)
+    if len(unique_groups) < folds:
+        raise ValueError(
+            f"Há somente {len(unique_groups)} grupos de {group_by} "
+            f"para {folds} folds."
+        )
     placeholder = np.zeros((len(dataframe), 1))
     splits: list[tuple[int, int, np.ndarray, np.ndarray]] = []
 
@@ -303,7 +387,9 @@ def make_splits(
             train_groups = set(groups[train_index])
             test_groups = set(groups[test_index])
             if train_groups & test_groups:
-                raise RuntimeError("Vazamento de animal entre treino e teste.")
+                raise RuntimeError(
+                    f"Vazamento de {group_by} entre treino e teste."
+                )
             splits.append((repeat + 1, fold, train_index, test_index))
     return splits
 
@@ -351,27 +437,38 @@ def paired_cluster_bootstrap(
     iterations: int,
     seed: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Compara a ROI principal com cada representação reamostrando animais."""
+    """Compara representações reamostrando a unidade de validação."""
 
     from sklearn.metrics import average_precision_score, roc_auc_score
 
     logistic = predictions[predictions["model"] == PRIMARY_MODEL]
     averaged = (
         logistic.groupby(
-            ["feature_set", "source_csv_row", "id", "target_monta"],
+            [
+                "feature_set",
+                "source_csv_row",
+                "id",
+                "validation_group_value",
+                "target_monta",
+            ],
             as_index=False,
         )["score"]
         .mean()
     )
     wide = (
         averaged.pivot(
-            index=["source_csv_row", "id", "target_monta"],
+            index=[
+                "source_csv_row",
+                "id",
+                "validation_group_value",
+                "target_monta",
+            ],
             columns="feature_set",
             values="score",
         )
         .reset_index()
     )
-    groups = wide["id"].astype("string").to_numpy()
+    groups = wide["validation_group_value"].astype("string").to_numpy()
     truth = wide["target_monta"].to_numpy(dtype=int)
     unique_groups = np.unique(groups)
     group_indices = {
@@ -578,16 +675,21 @@ def process(args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     raw = pd.read_csv(input_path, sep=";", encoding="utf-8-sig")
-    dataframe, dataset_summary = prepare_dataset(raw)
+    dataframe, dataset_summary = prepare_dataset(
+        raw,
+        collection_year=args.collection_year,
+    )
     splits = make_splits(
         dataframe,
         folds=args.folds,
         repeats=args.repeats,
         seed=args.seed,
+        group_by=args.group_by,
     )
 
     target = dataframe["target_monta"].to_numpy()
-    groups = dataframe["animal_group"].to_numpy()
+    validation_group_column = VALIDATION_GROUP_COLUMNS[args.group_by]
+    groups = dataframe[validation_group_column].to_numpy()
     fold_rows: list[dict[str, object]] = []
     prediction_rows: list[dict[str, object]] = []
     assignment_rows: list[dict[str, object]] = []
@@ -599,7 +701,8 @@ def process(args: argparse.Namespace) -> int:
             {
                 "repeat": repeat,
                 "fold": fold,
-                "animal_group": group,
+                "validation_group_type": args.group_by,
+                "validation_group_value": group,
                 "partition": "test",
             }
             for group in test_groups
@@ -632,8 +735,29 @@ def process(args: argparse.Namespace) -> int:
                         "model": model_name,
                         "train_records": int(len(train_index)),
                         "test_records": int(len(test_index)),
-                        "train_animals": int(len(train_groups)),
-                        "test_animals": int(len(test_groups)),
+                        "validation_group_type": args.group_by,
+                        "train_groups": int(len(train_groups)),
+                        "test_groups": int(len(test_groups)),
+                        "train_unique_animals": int(
+                            dataframe.loc[
+                                train_index, "animal_group"
+                            ].nunique()
+                        ),
+                        "test_unique_animals": int(
+                            dataframe.loc[
+                                test_index, "animal_group"
+                            ].nunique()
+                        ),
+                        "train_unique_dates": int(
+                            dataframe.loc[
+                                train_index, "collection_date"
+                            ].nunique()
+                        ),
+                        "test_unique_dates": int(
+                            dataframe.loc[
+                                test_index, "collection_date"
+                            ].nunique()
+                        ),
                         "train_positives": int(target[train_index].sum()),
                         "test_positives": int(target[test_index].sum()),
                         **metrics,
@@ -650,7 +774,12 @@ def process(args: argparse.Namespace) -> int:
                             "source_csv_row": int(source["source_csv_row"]),
                             "id": source["animal_group"],
                             "Data": source.get("Data"),
+                            "collection_date": source["collection_date"],
                             "Foto": source.get("Foto"),
+                            "validation_group_type": args.group_by,
+                            "validation_group_value": source[
+                                validation_group_column
+                            ],
                             "target_monta": int(target[row_index]),
                             "score": float(score[local_position]),
                             "prediction": int(prediction[local_position]),
@@ -692,6 +821,26 @@ def process(args: argparse.Namespace) -> int:
             for column in numeric_feature_columns
         ]
     )
+    date_audit = (
+        dataframe.groupby(
+            [
+                "collection_date_original",
+                "collection_date",
+                "date_year_corrected",
+            ],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            records=("source_csv_row", "size"),
+            positives=("target_monta", "sum"),
+            animals=("animal_group", "nunique"),
+        )
+        .sort_values(
+            ["collection_date", "collection_date_original"],
+            kind="stable",
+        )
+    )
     bootstrap_rows, bootstrap_summary = paired_cluster_bootstrap(
         predictions,
         iterations=args.bootstrap_iterations,
@@ -705,6 +854,11 @@ def process(args: argparse.Namespace) -> int:
         + [
             {"item": "folds", "value": args.folds},
             {"item": "repeats", "value": args.repeats},
+            {"item": "validation_group_type", "value": args.group_by},
+            {
+                "item": "validation_group_column",
+                "value": validation_group_column,
+            },
             {"item": "random_seed", "value": args.seed},
             {"item": "random_forest_estimators", "value": args.rf_estimators},
             {
@@ -721,6 +875,7 @@ def process(args: argparse.Namespace) -> int:
         "fold_assignments.csv": assignments,
         "feature_definitions.csv": feature_definitions,
         "feature_missingness.csv": feature_missingness,
+        "date_audit.csv": date_audit,
         "dataset_summary.csv": summary_table,
         "paired_bootstrap_differences.csv": bootstrap_rows,
         "paired_bootstrap_summary.csv": bootstrap_summary,
@@ -748,7 +903,11 @@ def process(args: argparse.Namespace) -> int:
     print(f"Animais: {dataframe['animal_group'].nunique()}")
     print(
         f"Validação: {args.repeats} repetições x {args.folds} folds "
-        "estratificados e agrupados por animal"
+        f"estratificados e agrupados por {args.group_by}"
+    )
+    print(
+        "Datas com ano corrigido somente na cópia analítica: "
+        f"{int(dataframe['date_year_corrected'].sum())}"
     )
     print(
         "Principal 11x11 + regressão logística: "
@@ -763,7 +922,7 @@ def process(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Compara representações térmicas com validação agrupada por animal."
+            "Compara representações térmicas com validação agrupada."
         )
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
@@ -774,6 +933,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument(
+        "--group-by",
+        choices=tuple(VALIDATION_GROUP_COLUMNS),
+        default="animal",
+        help=(
+            "Unidade mantida integralmente em treino ou teste: "
+            "animal ou data normalizada."
+        ),
+    )
+    parser.add_argument(
+        "--collection-year",
+        type=int,
+        default=2025,
+        help=(
+            "Ano verdadeiro da coleta usado para corrigir, somente na cópia "
+            "analítica, os anos incrementais da planilha."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rf-estimators", type=int, default=300)
     parser.add_argument("--bootstrap-iterations", type=int, default=500)
