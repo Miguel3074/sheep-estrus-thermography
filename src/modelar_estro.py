@@ -5,13 +5,13 @@ O conjunto de teste nunca compartilha com o treino a unidade escolhida em
 A análise principal é a combinação ``fixed_11 + logistic_regression``; os
 demais métodos são comparações e análises de sensibilidade pré-especificadas.
 
-Política provisória do rótulo:
+Política confirmada do rótulo:
 
 * ``Monta == true`` -> estro (1);
 * célula vazia em ``Monta`` -> não estro (0).
 
-Essa política depende do protocolo de campo e precisa ser confirmada pelos
-responsáveis pela coleta antes da análise científica final.
+O responsável confirmou em 30 de julho de 2026 que uma célula vazia significa
+ausência de monta observada.
 """
 
 from __future__ import annotations
@@ -348,7 +348,10 @@ def prepare_dataset(
         "records_with_previous_measurement": int(
             common["has_previous_measurement"].sum()
         ),
-        "label_policy": "Monta=true -> 1; Monta vazia -> 0 (provisório)",
+        "label_policy": (
+            "Monta=true -> 1; Monta vazia -> 0 "
+            "(confirmado em 2026-07-30)"
+        ),
         "primary_feature_set": PRIMARY_FEATURE_SET,
         "primary_model": PRIMARY_MODEL,
     }

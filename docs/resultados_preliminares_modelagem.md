@@ -9,11 +9,14 @@ generalizável para animais não vistos. Ela não constitui ainda o resultado
 final do TCC porque:
 
 1. 62 fotografias ainda não possuem ROI principal revisada;
-2. a interpretação de célula vazia em `Monta` como classe negativa precisa ser
-   confirmada pelos responsáveis pela coleta;
-3. não existe um conjunto externo independente;
-4. a temperatura ambiente e a data de coleta podem refletir o protocolo de
+2. não existe um conjunto externo independente;
+3. a temperatura ambiente e a data de coleta podem refletir o protocolo de
    sincronização, criando confundimento temporal.
+
+Em 30 de julho de 2026, o responsável confirmou que célula vazia em `Monta`
+significa ausência de monta observada. Portanto, a codificação negativa deixou
+de ser provisória, embora a qualidade da observação de campo continue sendo
+uma limitação normal do rótulo.
 
 ## Recuperação dos dados
 
@@ -42,7 +45,7 @@ A modelagem foi mantida na coorte congelada anterior à nova marcação manual:
 | Registros com ROI principal | 767 |
 | Coorte comum a todas as escalas | 765 |
 | Registros positivos para `Monta` | 65 |
-| Registros negativos provisórios | 700 |
+| Registros negativos confirmados pela regra de coleta | 700 |
 | Prevalência positiva | 8,5% |
 | Animais | 36 |
 | Animais com ao menos um positivo | 24 |
@@ -300,10 +303,9 @@ bootstrap ficam nos respectivos diretórios de saída.
 
 ## Próximos passos
 
-1. confirmar a semântica dos vazios em `Monta`;
-2. marcar os 61 POIs disponíveis e obter `FLIR1107`;
-3. confirmar o ano verdadeiro dos 137 registros sinalizados;
-4. regenerar todas as ROIs e repetir exatamente os dois bloqueios;
-5. obter uma coleta externa;
-6. manter `11 x 11` como análise principal e `15 x 15` como hipótese de
+1. marcar os 61 POIs disponíveis e obter `FLIR1107`;
+2. confirmar o ano verdadeiro dos 137 registros sinalizados;
+3. regenerar todas as ROIs e repetir exatamente os dois bloqueios;
+4. obter uma coleta externa;
+5. manter `11 x 11` como análise principal e `15 x 15` como hipótese de
    sensibilidade até existir validação independente.

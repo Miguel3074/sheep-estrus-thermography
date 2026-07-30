@@ -140,9 +140,9 @@ clique atomicamente. Execute novamente para retomar.
 
 ## Modelagem preliminar
 
-O rótulo principal é `Monta`. Provisoriamente, `true` é codificado como estro
-e célula vazia como não estro. Essa interpretação deve ser confirmada com os
-responsáveis pela coleta antes da análise científica final.
+O rótulo principal é `Monta`: `true` é codificado como estro e célula vazia
+como não estro. Em 30 de julho de 2026, o responsável confirmou que o vazio
+significa ausência de monta observada.
 
 Execução reproduzida:
 
@@ -257,9 +257,8 @@ de que os atributos temporais usam somente o histórico anterior do animal.
 
 1. marcar manualmente os 61 POIs disponíveis;
 2. localizar ou solicitar novamente a fotografia `FLIR1107`;
-3. confirmar se célula vazia em `Monta` significa observação negativa;
-4. confirmar que os anos 2026–2033 são erros de preenchimento e que o ano
+3. confirmar que os anos 2026–2033 são erros de preenchimento e que o ano
    correto da coleta é 2025;
-5. regenerar as ROIs e repetir as duas validações depois da revisão;
-6. obter uma coleta independente ou um novo período de coleta;
-7. congelar a especificação final antes do teste independente.
+4. regenerar as ROIs e repetir as duas validações depois da revisão;
+5. obter uma coleta independente ou um novo período de coleta;
+6. congelar a especificação final antes do teste independente.
