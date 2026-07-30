@@ -205,6 +205,27 @@ o modelo somente ambiental foi `+0,008` em PR-AUC, com faixa de
 `-0,023` a `+0,048`. Portanto, o ganho térmico não se manteve conclusivo ao
 bloquear datas inteiras.
 
+### Experimento temporal exploratório
+
+O pipeline também calcula, para cada animal, a diferença em relação à medição
+anterior, a mudança por dia e o desvio em relação à mediana das três medições
+anteriores. Esses atributos são calculados em ordem cronológica e nunca usam
+rótulos ou medições futuras. Há histórico anterior para 729 dos 765 registros;
+os 36 primeiros registros, um por animal, são imputados apenas dentro do treino
+de cada fold.
+
+Na regressão logística, combinar histórico com a ROI `11 x 11` aumentou a
+ROC-AUC de `0,620` para `0,667` em animais novos e de `0,603` para `0,661` em
+datas novas. A acurácia balanceada subiu de `0,598` para `0,643` e de `0,602`
+para `0,650`, respectivamente. Entretanto, a PR-AUC média caiu de `0,192` para
+`0,174` por animal e de `0,189` para `0,172` por data. O ganho de ROC também
+não foi conclusivo no bootstrap agrupado.
+
+A SVM apresentou ganhos menores de ROC e a `Random Forest` piorou, chegando a
+sensibilidade zero na validação temporal por data. Portanto, a `Random Forest`
+não é o melhor modelo apesar de sua acurácia bruta alta: ela obtém esse número
+prevendo quase todos os registros como negativos.
+
 Saídas em `outputs/modeling_grouped/`:
 
 - `summary_metrics.csv`: médias, desvios e quantis dos 25 folds;
@@ -226,10 +247,11 @@ cada data original e sua versão analítica.
 python -m unittest discover -s tests -v
 ```
 
-Os 16 testes cobrem centralização e limites das janelas fixas, conectividade e
+Os 18 testes cobrem centralização e limites das janelas fixas, conectividade e
 limite espacial do crescimento por semente, cálculo dos atributos térmicos,
 recuperação segura, auditoria das anotações, preparação dos rótulos,
-normalização auditável das datas e ausência de vazamento entre datas.
+normalização auditável das datas, ausência de vazamento entre datas e garantia
+de que os atributos temporais usam somente o histórico anterior do animal.
 
 ## Próximas etapas
 

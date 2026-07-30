@@ -9,7 +9,11 @@ import pandas as pd
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from modelar_estro import make_splits, normalize_collection_dates
+from modelar_estro import (
+    add_temporal_features,
+    make_splits,
+    normalize_collection_dates,
+)
 
 
 class CollectionDateTests(unittest.TestCase):
@@ -60,6 +64,64 @@ class GroupedValidationTests(unittest.TestCase):
             self.assertFalse(
                 set(dates[train_index]) & set(dates[test_index])
             )
+
+
+class TemporalFeatureTests(unittest.TestCase):
+    @staticmethod
+    def sample_dataframe() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "animal_group": ["a", "a", "a", "b"],
+                "collection_date": [
+                    "2025-02-01",
+                    "2025-02-02",
+                    "2025-02-04",
+                    "2025-02-01",
+                ],
+                "source_csv_row": [1, 2, 3, 4],
+                "fixed_11_temp_mean": [10.0, 12.0, 18.0, 30.0],
+                "fixed_11_temp_p90": [11.0, 13.0, 19.0, 31.0],
+                "fixed_11_temp_max": [12.0, 14.0, 20.0, 32.0],
+                "ambient_temperature_c": [20.0, 21.0, 23.0, 25.0],
+            }
+        )
+
+    def test_uses_only_previous_measurements_from_same_animal(self) -> None:
+        temporal = add_temporal_features(self.sample_dataframe())
+
+        self.assertTrue(pd.isna(temporal.loc[0, "days_since_previous"]))
+        self.assertEqual(temporal.loc[1, "days_since_previous"], 1.0)
+        self.assertEqual(temporal.loc[2, "days_since_previous"], 2.0)
+        self.assertTrue(pd.isna(temporal.loc[3, "days_since_previous"]))
+        self.assertEqual(
+            temporal.loc[2, "fixed_11_temp_mean_delta_previous"],
+            6.0,
+        )
+        self.assertEqual(
+            temporal.loc[2, "fixed_11_temp_mean_delta_per_day"],
+            3.0,
+        )
+        self.assertEqual(
+            temporal.loc[2, "fixed_11_temp_mean_minus_recent_median"],
+            7.0,
+        )
+
+    def test_future_measurement_does_not_change_past_features(self) -> None:
+        original = self.sample_dataframe()
+        altered = original.copy()
+        altered.loc[2, "fixed_11_temp_mean"] = 99.0
+
+        before = add_temporal_features(original)
+        after = add_temporal_features(altered)
+        columns = [
+            "fixed_11_temp_mean_delta_previous",
+            "fixed_11_temp_mean_delta_per_day",
+            "fixed_11_temp_mean_minus_recent_median",
+        ]
+        pd.testing.assert_frame_equal(
+            before.loc[:1, columns],
+            after.loc[:1, columns],
+        )
 
 
 if __name__ == "__main__":

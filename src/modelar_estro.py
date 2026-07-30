@@ -41,7 +41,7 @@ VALIDATION_GROUP_COLUMNS = {
 }
 
 
-FEATURE_SETS: dict[str, tuple[str, ...]] = {
+BASE_FEATURE_SETS: dict[str, tuple[str, ...]] = {
     "ambient_only": ("ambient_temperature_c",),
     "field_spot": ("field_spot_temperature", "ambient_temperature_c"),
     "radiometric_poi": ("poi_temperature", "ambient_temperature_c"),
@@ -76,6 +76,40 @@ FEATURE_SETS: dict[str, tuple[str, ...]] = {
         "rg_temp_max",
         "rg_temp_std",
         "ambient_temperature_c",
+    ),
+}
+
+TEMPORAL_SOURCE_COLUMNS = (
+    "fixed_11_temp_mean",
+    "fixed_11_temp_p90",
+    "fixed_11_temp_max",
+    "ambient_temperature_c",
+)
+TEMPORAL_DERIVED_COLUMNS = tuple(
+    derived
+    for source in TEMPORAL_SOURCE_COLUMNS
+    for derived in (
+        f"{source}_delta_previous",
+        f"{source}_delta_per_day",
+        f"{source}_minus_recent_median",
+    )
+)
+TEMPORAL_COMMON_COLUMNS = (
+    "days_since_previous",
+    "has_previous_measurement",
+)
+TEMPORAL_HISTORY_WINDOW = 3
+
+FEATURE_SETS: dict[str, tuple[str, ...]] = {
+    **BASE_FEATURE_SETS,
+    "fixed_11_temporal": (
+        *BASE_FEATURE_SETS["fixed_11"],
+        *TEMPORAL_DERIVED_COLUMNS,
+        *TEMPORAL_COMMON_COLUMNS,
+    ),
+    "fixed_11_change_only": (
+        *TEMPORAL_DERIVED_COLUMNS,
+        *TEMPORAL_COMMON_COLUMNS,
     ),
 }
 
@@ -146,6 +180,78 @@ def normalize_collection_dates(
     return normalized.dt.strftime("%Y-%m-%d"), corrected.astype(bool)
 
 
+def add_temporal_features(
+    dataframe: pd.DataFrame,
+    *,
+    history_window: int = TEMPORAL_HISTORY_WINDOW,
+) -> pd.DataFrame:
+    """Cria mudanças térmicas usando somente medições anteriores do animal."""
+
+    if history_window < 1:
+        raise ValueError("A janela temporal deve ser maior ou igual a 1.")
+
+    required = {
+        "animal_group",
+        "collection_date",
+        "source_csv_row",
+        *TEMPORAL_SOURCE_COLUMNS,
+    }
+    missing = required - set(dataframe.columns)
+    if missing:
+        raise ValueError(
+            "Colunas temporais necessárias ausentes: "
+            + ", ".join(sorted(missing))
+        )
+
+    temporal = dataframe.copy()
+    temporal["_original_order"] = np.arange(len(temporal))
+    temporal["_collection_datetime"] = pd.to_datetime(
+        temporal["collection_date"],
+        format="%Y-%m-%d",
+        errors="raise",
+    )
+    temporal = temporal.sort_values(
+        ["animal_group", "_collection_datetime", "source_csv_row"],
+        kind="stable",
+    )
+
+    animal_groups = temporal.groupby("animal_group", sort=False)
+    previous_date = animal_groups["_collection_datetime"].shift(1)
+    temporal["days_since_previous"] = (
+        temporal["_collection_datetime"] - previous_date
+    ).dt.days.astype(float)
+    temporal["has_previous_measurement"] = (
+        previous_date.notna().astype("int8")
+    )
+    positive_interval = temporal["days_since_previous"].where(
+        temporal["days_since_previous"] > 0
+    )
+
+    for source in TEMPORAL_SOURCE_COLUMNS:
+        previous = animal_groups[source].shift(1)
+        delta = temporal[source] - previous
+        recent_median = previous.groupby(
+            temporal["animal_group"],
+            sort=False,
+        ).transform(
+            lambda values: values.rolling(
+                history_window,
+                min_periods=1,
+            ).median()
+        )
+        temporal[f"{source}_delta_previous"] = delta
+        temporal[f"{source}_delta_per_day"] = delta / positive_interval
+        temporal[f"{source}_minus_recent_median"] = (
+            temporal[source] - recent_median
+        )
+
+    return (
+        temporal.sort_values("_original_order", kind="stable")
+        .drop(columns=["_original_order", "_collection_datetime"])
+        .reset_index(drop=True)
+    )
+
+
 def prepare_dataset(
     dataframe: pd.DataFrame,
     *,
@@ -160,7 +266,7 @@ def prepare_dataset(
         "source_csv_row",
     }
     required.update(
-        column for columns in FEATURE_SETS.values() for column in columns
+        column for columns in BASE_FEATURE_SETS.values() for column in columns
         if column != "field_spot_temperature"
     )
     missing = required - set(dataframe.columns)
@@ -193,12 +299,13 @@ def prepare_dataset(
     numeric_columns = sorted(
         {
             column
-            for columns in FEATURE_SETS.values()
+            for columns in BASE_FEATURE_SETS.values()
             for column in columns
         }
     )
     for column in numeric_columns:
         prepared[column] = parse_locale_numeric(prepared[column])
+    prepared = add_temporal_features(prepared)
 
     fixed_15_available = (
         prepared["fixed_15_available"]
@@ -236,6 +343,10 @@ def prepare_dataset(
         ),
         "normalized_collection_dates": int(
             common["collection_date"].nunique()
+        ),
+        "temporal_history_window": int(TEMPORAL_HISTORY_WINDOW),
+        "records_with_previous_measurement": int(
+            common["has_previous_measurement"].sum()
         ),
         "label_policy": "Monta=true -> 1; Monta vazia -> 0 (provisório)",
         "primary_feature_set": PRIMARY_FEATURE_SET,
@@ -417,7 +528,11 @@ def aggregate_metrics(fold_metrics: pd.DataFrame) -> pd.DataFrame:
                 "primary"
                 if feature_set == PRIMARY_FEATURE_SET
                 and model == PRIMARY_MODEL
-                else "comparison"
+                else (
+                    "exploratory_temporal"
+                    if feature_set.startswith("fixed_11_")
+                    else "comparison"
+                )
             ),
             "fold_results": int(len(group)),
         }
@@ -797,7 +912,11 @@ def process(args: argparse.Namespace) -> int:
                 "role": (
                     "primary"
                     if feature_set == PRIMARY_FEATURE_SET
-                    else "comparison"
+                    else (
+                        "exploratory_temporal"
+                        if feature_set.startswith("fixed_11_")
+                        else "comparison"
+                    )
                 ),
                 "columns": ",".join(columns),
             }

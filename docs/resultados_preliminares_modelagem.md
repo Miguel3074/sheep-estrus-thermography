@@ -217,6 +217,58 @@ contra o modelo ambiental foi:
 As duas faixas incluem zero. Portanto, quando datas inteiras são bloqueadas, a
 ROI principal ainda não demonstra ganho robusto sobre a temperatura ambiente.
 
+## Experimento temporal exploratório
+
+Estudos com medições repetidas indicam que a temperatura superficial da vulva
+varia entre as fases do ciclo e tende a aumentar entre o estro, a ovulação e o
+pós-ovulatório
+([de Freitas et al., 2018](https://doi.org/10.1016/j.theriogenology.2018.07.015);
+[de Freitas et al., 2018b](https://doi.org/10.1016/j.livsci.2018.07.014)).
+Por isso foi testada uma representação longitudinal, sem substituir a análise
+principal pré-especificada.
+
+Para cada animal e variável térmica da ROI `11 x 11`, o script calcula:
+
+- diferença para a medição anterior;
+- diferença dividida pelo intervalo em dias;
+- diferença para a mediana das três medições anteriores;
+- intervalo em dias e indicador de disponibilidade do histórico.
+
+Também são calculadas as mudanças da temperatura ambiente. O processamento é
+feito em ordem cronológica, nunca utiliza `Monta` e não consulta medições
+futuras. Dos 765 registros, 729 possuem uma medição anterior. Os 36 primeiros
+registros, um por animal, ficam com atributos temporais ausentes; a imputação
+pela mediana é ajustada somente no conjunto de treino de cada fold.
+
+Resultados médios nos 25 folds:
+
+| Grupo de teste | Representação/modelo | PR-AUC | ROC-AUC | F1 | Acurácia balanceada |
+|---|---|---:|---:|---:|---:|
+| Animal | ROI `11 x 11` + Logística | 0,192 | 0,620 | 0,200 | 0,598 |
+| Animal | ROI + histórico + Logística | 0,174 | 0,667 | 0,238 | 0,643 |
+| Animal | ROI `11 x 11` + SVM | 0,198 | 0,665 | 0,238 | 0,626 |
+| Animal | ROI + histórico + SVM | 0,171 | 0,690 | 0,219 | 0,625 |
+| Data | ROI `11 x 11` + Logística | 0,189 | 0,603 | 0,203 | 0,602 |
+| Data | ROI + histórico + Logística | 0,172 | 0,661 | 0,247 | 0,650 |
+| Data | ROI `11 x 11` + SVM | 0,179 | 0,625 | 0,203 | 0,587 |
+| Data | ROI + histórico + SVM | 0,183 | 0,630 | 0,203 | 0,609 |
+
+A regressão logística temporal melhorou ROC-AUC, F1 e acurácia balanceada nos
+dois bloqueios, mas reduziu a PR-AUC média dos folds. A SVM teve ganho menor de
+ROC e não melhorou simultaneamente F1 e PR-AUC. A representação contendo
+somente mudanças, sem as temperaturas atuais, ficou próxima ou abaixo do
+acaso.
+
+Para a regressão logística, o ganho observado de ROC-AUC da representação
+temporal foi `+0,056` por animal, com faixa bootstrap de `-0,010` a `+0,124`,
+e `+0,077` por data, com faixa de `-0,018` a `+0,216`. Como ambas incluem
+zero, o ganho ainda é exploratório.
+
+A `Random Forest` não melhorou com o histórico. Na validação por data, sua
+sensibilidade temporal foi zero, apesar da alta acurácia bruta causada pelo
+predomínio da classe negativa. Ela não deve ser selecionada como modelo
+principal.
+
 ## Reprodução
 
 Validação por animal:
