@@ -30,6 +30,10 @@ O estado exato das marcações, a distinção entre POI manual e ROI automática
 o procedimento para concluir as pendências estão registrados em
 [`docs/status_anotacoes.md`](docs/status_anotacoes.md).
 
+O diagnóstico científico, a auditoria dos horários EXIF, as tecnologias
+adequadas à amostra e o protocolo necessário para validação externa estão em
+[`docs/roadmap_cientifico.md`](docs/roadmap_cientifico.md).
+
 ## Método de ROI adotado
 
 As colunas `Coord_X` e `Coord_Y` de `planilha/planilha_anotada.CSV` representam
@@ -226,6 +230,58 @@ sensibilidade zero na validação temporal por data. Portanto, a `Random Forest`
 não é o melhor modelo apesar de sua acurácia bruta alta: ela obtém esse número
 prevendo quase todos os registros como negativos.
 
+### Alerta no dia atual ou seguinte
+
+Também foi testado um alvo exploratório que considera positiva a fotografia
+quando há monta no mesmo dia ou no dia seguinte. Como não há horário na
+planilha, essa é uma aproximação por dias de calendário, e não uma janela
+cronometrada de exatamente 24 horas.
+
+```powershell
+.\venv\Scripts\python.exe src/avaliar_janela_24h.py
+.\venv\Scripts\python.exe src/bootstrap_janela_24h.py
+```
+
+O alvo ampliado possui 101 positivos em 765 registros (13,2%). Com ROI
+`15 x 15` e regressão logística, a PR-AUC/F1 passou de `0,205/0,227` para
+`0,279/0,310` na validação por animal. Na validação por data com purga de um
+dia, passou de `0,182/0,144` para `0,264/0,168`.
+
+O contraste térmico local empatou com a ROI fixa no bootstrap de 1.000
+reamostragens; a região conectada por limiar foi inferior em comparações
+importantes. `Extra Trees` também não apresentou melhora conjunta de PR-AUC,
+F1 e estabilidade. Assim, o alvo de alerta é promissor como análise
+exploratória, mas o modelo ainda não está pronto para uso operacional.
+
+### Personalização e eventos
+
+Foram testados atributos relativos às demais ovelhas do mesmo dia, diferenças
+contra os cinco dias anteriores do próprio animal, sua combinação e
+temperatura retal como controle:
+
+```powershell
+.\venv\Scripts\python.exe src/avaliar_alerta_personalizado.py `
+  --models logistic svm_rbf
+```
+
+O conjunto combinado melhorou ligeiramente a PR-AUC por animal de `0,279`
+para `0,284`, mas caiu para `0,220` na validação por data, contra `0,264` da
+ROI `15 x 15`. A faixa bootstrap da diferença incluiu zero. A normalização
+somente pelo rebanho e os atributos somente individuais foram
+significativamente inferiores à ROI fixa na PR-AUC temporal.
+
+Com o limiar de F1, a ROI `15 x 15` detectou 46,2% das 44 sequências de monta
+na validação por data, mas produziu 23,3 falsos alertas por 100 animais-dia e
+precisão de alerta de apenas 10,2%. Como ranking diário, ela continuou sendo a
+melhor: PR-AUC diária `0,290` e precisão de 18,6% entre as três ovelhas de
+maior escore.
+
+`HistGradientBoosting` e temperatura retal não apresentaram ganho estável.
+Assim, a ROI `15 x 15` com regressão logística permanece a referência
+exploratória. Antes de testar novos algoritmos, é necessário definir o evento
+biológico, obter horários e estabelecer um limite aceitável de falsos
+alertas.
+
 Saídas em `outputs/modeling_grouped/`:
 
 - `summary_metrics.csv`: médias, desvios e quantis dos 25 folds;
@@ -244,21 +300,33 @@ cada data original e sua versão analítica.
 ## Testes
 
 ```powershell
-python -m unittest discover -s tests -v
+.\venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Os 18 testes cobrem centralização e limites das janelas fixas, conectividade e
+Os 37 testes cobrem centralização e limites das janelas fixas, conectividade e
 limite espacial do crescimento por semente, cálculo dos atributos térmicos,
 recuperação segura, auditoria das anotações, preparação dos rótulos,
 normalização auditável das datas, ausência de vazamento entre datas e garantia
-de que os atributos temporais usam somente o histórico anterior do animal.
+de que os atributos temporais usam somente o histórico anterior do animal,
+criação do alvo de alerta, purga de datas adjacentes, seleção interna do limiar
+de F1, bootstrap agrupado, mediana leave-one-out do rebanho, dupla diferença,
+pareamento de eventos, tratamento de empates no ranking diário, auditoria EXIF,
+correção temporal rastreável e criação dos alvos prospectivos por próxima
+coleta e janela cronometrada de 24 horas.
 
 ## Próximas etapas
 
-1. marcar manualmente os 61 POIs disponíveis;
-2. localizar ou solicitar novamente a fotografia `FLIR1107`;
-3. confirmar que os anos 2026–2033 são erros de preenchimento e que o ano
-   correto da coleta é 2025;
-4. regenerar as ROIs e repetir as duas validações depois da revisão;
-5. obter uma coleta independente ou um novo período de coleta;
-6. congelar a especificação final antes do teste independente.
+1. confirmar se o relógio da câmera estava deslocado e se foto/monta ocorreram
+   na mesma sessão;
+2. confirmar `FLIR0689`, corrigir de forma rastreável `FLIR1106` e tentar
+   recuperar `FLIR1107`;
+3. anotar 120 máscaras anatômicas estratificadas, com 30 revisadas por outro
+   avaliador;
+4. comparar as ROIs somente contra essas máscaras, sem consultar `Monta`;
+5. realizar análise longitudinal alinhada ao evento e controlada por animal e
+   ambiente;
+6. usar “monta na próxima coleta” como alvo preditivo principal;
+7. definir o episódio biológico e o limite aceitável de falsos alertas;
+8. congelar atributos, modelo e limiar;
+9. validar em outro período ou lote, idealmente com confirmação hormonal ou
+   ultrassonográfica em uma subcoorte.

@@ -272,6 +272,321 @@ sensibilidade temporal foi zero, apesar da alta acurácia bruta causada pelo
 predomínio da classe negativa. Ela não deve ser selecionada como modelo
 principal.
 
+## Avaliação aprofundada da janela de alerta
+
+Foi investigado se o problema fica mais informativo ao considerar positiva
+uma fotografia obtida no dia da monta **ou no dia anterior**. Como a planilha
+registra apenas a data e não o horário, esse alvo deve ser descrito
+corretamente como `dia atual + dia seguinte`, uma aproximação de alerta em
+24 horas. Ele não representa uma janela cronometrada de exatamente 24 horas.
+
+Essa análise é fisiologicamente plausível porque a temperatura vulvar pode
+permanecer elevada entre o estro, a ovulação e o período pós-ovulatório
+([de Freitas et al., 2018](https://doi.org/10.1016/j.theriogenology.2018.07.015)).
+Janelas de alerta de 12, 24, 48 e 72 horas também já foram avaliadas em
+sistemas automatizados de detecção de estro em bovinos
+([Perez Marquez et al., 2022](https://doi.org/10.1016/j.animal.2022.100585)).
+Isso fundamenta o experimento, mas não substitui sua validação específica em
+ovelhas.
+
+### Protocolo contra otimismo
+
+Foram comparados os alvos `monta no dia` e `monta no dia ou no dia seguinte`
+na mesma coorte de 765 registros. O segundo alvo aumentou o número de
+positivos de 65 (8,5%) para 101 (13,2%).
+
+O protocolo utilizou três repetições de cinco folds externos. Em cada fold, o
+limiar que maximiza F1 foi escolhido somente por validação agrupada interna
+com três folds. Foram executados dois bloqueios:
+
+- por animal, sem repetir o mesmo animal entre treino e teste;
+- por data, sem repetir a data e removendo também do treino as datas a até um
+  dia do teste. Essa purga evita que alvos sobrepostos de dias consecutivos
+  produzam vazamento.
+
+Em todos os 15 testes de cada alvo e bloqueio havia exemplos positivos e
+negativos. Depois da purga temporal, cada treino conservou de 282 a 413
+registros e cada teste, de 141 a 169 registros para o alvo de alerta.
+
+Como as classes são desbalanceadas, acurácia comum não foi usada para escolher
+o modelo. F1 é a média harmônica entre precisão e sensibilidade, não entre
+acurácia e sensibilidade, e depende do limiar adotado. Por isso ela foi
+reportada junto com precisão, sensibilidade e especificidade. A PR-AUC também
+foi mantida como métrica principal independente de um único ponto de corte,
+pois curvas precisão-revocação são mais informativas que ROC em conjuntos
+fortemente desbalanceados
+([Saito e Rehmsmeier, 2015](https://doi.org/10.1371/journal.pone.0118432)).
+
+### O que mudou ao incluir o dia seguinte
+
+Comparação justa usando a mesma representação `15 x 15` e a mesma regressão
+logística:
+
+| Grupo de teste | Alvo | PR-AUC | ROC-AUC | F1 |
+|---|---|---:|---:|---:|
+| Animal | Monta no dia | 0,205 | 0,644 | 0,227 |
+| Animal | Dia atual + seguinte | 0,279 | 0,653 | 0,310 |
+| Data com purga | Monta no dia | 0,182 | 0,583 | 0,144 |
+| Data com purga | Dia atual + seguinte | 0,264 | 0,651 | 0,168 |
+
+A PR-AUC de referência de um classificador aleatório sobe de 0,085 para 0,132
+quando a prevalência aumenta. Mesmo descontando esse efeito, o excesso de
+PR-AUC da ROI `15 x 15` sobre a prevalência passou de `0,120` para `0,147` no
+bloqueio por animal e de `0,097` para `0,132` no bloqueio temporal. Portanto,
+a melhora não se explica apenas pelo maior número de positivos.
+
+### Comparação de representações e algoritmos
+
+Além do POI e da ROI fixa, foram avaliados:
+
+- elipse de raios 4 e 7 pixels;
+- 10% dos pixels mais quentes do quadrado `15 x 15`, combinados com contraste
+  entre núcleo e anel local;
+- região conectada a `±0,1 °C` da semente, limitada a sete pixels;
+- `Extra Trees`, além de regressão logística e SVM.
+
+Resultados selecionados para `dia atual + seguinte`, como média dos folds:
+
+| Grupo | Representação/modelo | PR-AUC | ROC-AUC | F1 | Precisão | Sens. | Espec. |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Animal | `15 x 15` + Logística | 0,279 | 0,653 | 0,310 | 0,233 | 0,490 | 0,758 |
+| Animal | Contraste quente + Logística | 0,282 | 0,663 | 0,310 | 0,241 | 0,476 | 0,772 |
+| Animal | POI + SVM | 0,268 | 0,660 | 0,328 | 0,275 | 0,422 | 0,835 |
+| Animal | POI + Extra Trees | 0,282 | 0,699 | 0,279 | 0,248 | 0,396 | 0,823 |
+| Data | `15 x 15` + Logística | 0,264 | 0,651 | 0,168 | 0,124 | 0,498 | 0,546 |
+| Data | Contraste quente + Logística | 0,254 | 0,653 | 0,199 | 0,164 | 0,507 | 0,565 |
+| Data | POI + SVM | 0,229 | 0,616 | 0,253 | 0,157 | 0,778 | 0,338 |
+| Data | POI + Extra Trees | 0,256 | 0,656 | 0,249 | 0,184 | 0,737 | 0,348 |
+
+O POI com SVM apresentou o maior F1 por animal, mas sua configuração temporal
+atingiu esse F1 com 77,8% de sensibilidade e apenas 33,8% de especificidade:
+ela geraria muitos falsos alertas. O desvio-padrão do limiar interno da SVM por
+data foi `0,635`, evidenciando que o ponto de corte não transfere de forma
+estável entre dias. A `Extra Trees` aumentou ROC-AUC em alguns cenários, mas
+não melhorou simultaneamente PR-AUC, F1 e estabilidade. Não há evidência de
+que trocar apenas o algoritmo resolva o problema.
+
+### Bootstrap pareado das ROIs
+
+As predições fora da amostra foram promediadas por registro nas três
+repetições. Em seguida, foram feitas 1.000 reamostragens de animais ou datas
+inteiras. As comparações abaixo são `candidata - ROI 15 x 15` na regressão
+logística:
+
+| Grupo | Candidata | Métrica | Diferença | Faixa 2,5%–97,5% |
+|---|---|---|---:|---:|
+| Animal | Contraste quente | PR-AUC | +0,002 | -0,031 a +0,032 |
+| Animal | Contraste quente | ROC-AUC | +0,016 | -0,022 a +0,048 |
+| Data | Contraste quente | PR-AUC | -0,009 | -0,022 a +0,025 |
+| Data | Contraste quente | ROC-AUC | +0,009 | -0,016 a +0,040 |
+| Animal | Região conectada | PR-AUC | -0,046 | -0,095 a -0,010 |
+| Data | Região conectada | ROC-AUC | -0,033 | -0,069 a -0,005 |
+
+As faixas do contraste térmico incluem zero: ele empatou estatisticamente com
+a ROI fixa nesta amostra. Já o crescimento conectado foi inferior em duas
+comparações. Isso reforça que sem máscaras anatômicas manuais não é possível
+afirmar que um limiar de temperatura segmenta melhor a vulva. Estudos que
+medem a vulva por termografia precisam controlar a qualidade de aquisição. Um
+estudo recente manteve tamanho e orientação da ROI constantes e excluiu
+imagens com borrão, umidade, sujeira ou reflexão
+([Pérez-García et al., 2026](https://doi.org/10.1111/avj.70112)).
+
+### Decisão resultante
+
+O alvo de `dia atual + dia seguinte` deve continuar como experimento
+exploratório de **alerta**, enquanto `Monta` no próprio dia permanece o alvo
+original. A ROI fixa ainda é a referência mais defensável; o contraste quente
+pode permanecer como comparação, mas o crescimento por limiar não deve
+substituí-la.
+
+O próximo ganho provável não está em testar dezenas de classificadores, e sim
+em melhorar o desenho dos dados:
+
+1. obter horário da fotografia e da monta para testar janelas reais de 12, 24
+   e 48 horas;
+2. confirmar os anos das datas e concluir a revisão dos POIs;
+3. desenhar máscaras anatômicas em uma amostra estratificada e então medir
+   Dice/IoU de qualquer segmentação automática;
+4. registrar ou controlar sujeira, umidade, distância, ângulo e temperatura
+   ambiente;
+5. congelar modelo e limiar antes de avaliar um novo período ou lote.
+
+## Experimento personalizado e avaliação por evento
+
+Foi investigado se a temperatura deveria ser interpretada em relação ao
+próprio animal e ao restante do rebanho, em vez de usar somente o valor
+absoluto da ROI. A auditoria mostrou que os 765 registros são 765 combinações
+distintas de animal e data; portanto, não existem fotografias repetidas no
+mesmo dia que possam ser agregadas para reduzir ruído.
+
+A base possui 36 animais e 24 datas. Os 65 dias com monta formam 44 sequências
+quando apenas dias positivos consecutivos são unidos. Se positivos separados
+por um único dia negativo forem considerados o mesmo episódio, existem 36
+eventos. Doze animais não possuem nenhuma monta positiva. Todos os positivos
+ocorrem entre 12 e 28 de fevereiro; de 1º a 6 de março não há positivos. Essa
+concentração reforça o risco de confundimento com data, ambiente e etapa do
+protocolo.
+
+### Atributos e validação
+
+Foram comparados:
+
+- temperatura ambiente isolada;
+- ROI fixa `15 x 15`;
+- diferença e percentil da ovelha contra as demais ovelhas fotografadas no
+  mesmo dia, usando mediana leave-one-out;
+- diferença para a medição anterior e para a mediana dos cinco dias anteriores
+  do próprio animal;
+- combinação de valores absolutos, relativos ao rebanho e históricos;
+- temperatura retal como controle comparativo, não como proposta de método
+  não invasivo.
+
+Os atributos históricos usam somente o passado. Os atributos do rebanho usam
+apenas temperaturas, nunca os rótulos, e pressupõem que o lote inteiro seja
+fotografado antes dos alertas. Regressão logística, SVM RBF e
+`HistGradientBoosting` foram avaliados com três repetições de cinco folds. O
+limiar de F1 foi escolhido em três folds internos e a validação por data
+manteve a purga de um dia.
+
+Resultados selecionados:
+
+| Grupo | Representação/modelo | PR-AUC | ROC-AUC | F1 | Precisão | Sens. | Espec. |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Animal | `15 x 15` + Logística | 0,279 | 0,653 | 0,310 | 0,233 | 0,490 | 0,758 |
+| Animal | Combinado + Logística | 0,284 | 0,686 | 0,313 | 0,227 | 0,556 | 0,722 |
+| Animal | Combinado + SVM | 0,280 | 0,679 | 0,323 | 0,240 | 0,545 | 0,737 |
+| Data | `15 x 15` + Logística | 0,264 | 0,651 | 0,168 | 0,124 | 0,498 | 0,546 |
+| Data | Combinado + Logística | 0,220 | 0,627 | 0,216 | 0,168 | 0,779 | 0,271 |
+| Data | Personalizado + Logística | 0,163 | 0,494 | 0,195 | 0,117 | 0,710 | 0,260 |
+| Data | Rebanho relativo + Logística | 0,156 | 0,466 | 0,215 | 0,125 | 0,850 | 0,112 |
+| Data | Retal + Logística | 0,231 | 0,635 | 0,128 | 0,077 | 0,451 | 0,565 |
+
+O conjunto combinado apresentou um pequeno ganho em animais novos, mas perdeu
+PR-AUC e especificidade entre datas. Seu F1 temporal maior foi obtido emitindo
+muito mais positivos: a sensibilidade chegou a 77,9%, enquanto a
+especificidade caiu para 27,1%.
+
+No bootstrap de 500 reamostragens, a diferença `combinado - 15 x 15` foi:
+
+| Grupo | Métrica | Diferença | Faixa 2,5%–97,5% |
+|---|---|---:|---:|
+| Animal | PR-AUC | +0,028 | -0,050 a +0,100 |
+| Animal | ROC-AUC | +0,041 | -0,027 a +0,092 |
+| Data | PR-AUC | -0,034 | -0,079 a +0,036 |
+| Data | ROC-AUC | -0,002 | -0,075 a +0,094 |
+
+Todas as faixas incluem zero. Em contraste, a normalização somente pelo
+rebanho reduziu a PR-AUC temporal em `-0,104`, com faixa de `-0,160` a
+`-0,016`, e os atributos somente personalizados reduziram em `-0,108`, com
+faixa de `-0,170` a `-0,007`. Portanto, essas representações isoladas foram
+inferiores à ROI fixa nesta base.
+
+O `HistGradientBoosting` não melhorou a ordenação dos positivos entre datas.
+Seu F1 mais alto por animal ocorreu usando somente ambiente, evidência de
+confundimento e não de sinal anatômico. A temperatura retal também não
+apresentou ganho estável sobre a termografia.
+
+### Alertas por evento e ranking diário
+
+Considerando 44 eventos e o limiar escolhido para F1, a ROI `15 x 15` com
+regressão logística, validada por data, detectou em média 46,2% dos eventos.
+Porém, somente 10,2% dos episódios de alerta correspondiam a um evento e
+ocorreram 23,3 falsos alertas por 100 animais-dia. Assim, o limiar atual não é
+operacionalmente aceitável.
+
+Também foi avaliada a ordenação das ovelhas dentro de cada dia, que é imune ao
+ganho artificial do ambiente comum ao lote. A ROI `15 x 15` com regressão
+logística obteve a melhor precisão média diária (`0,290`). Se fossem
+inspecionadas as três ovelhas de maior escore por dia, a precisão seria 18,6%
+e a cobertura dos registros positivos, 12,9%. Com cinco ovelhas, os valores
+seriam 15,8% e 18,2%. O ranking é mais defensável que o alerta binário, mas
+ainda recupera poucos positivos.
+
+### Decisão após a personalização
+
+A ROI `15 x 15` com regressão logística continua sendo a melhor referência
+exploratória para o alvo `dia atual + dia seguinte`. Os atributos combinados
+podem permanecer registrados como análise de sensibilidade, mas não devem
+substituí-la: o pequeno ganho por animal não foi confirmado entre datas nem no
+bootstrap.
+
+O gargalo agora é a definição e a qualidade do evento. Antes de outra rodada
+de algoritmos, é necessário confirmar:
+
+1. se montas em dias próximos pertencem ao mesmo episódio;
+2. qual é o primeiro ciclo de interesse após a sincronização;
+3. se existem horários de fotografia e monta;
+4. se os dias após um evento deveriam continuar na coorte ou ser censurados;
+5. qual número de falsos alertas por animal-dia seria aceitável.
+
+## Auditoria EXIF e alvos prospectivos
+
+Uma auditoria posterior recuperou a data e a hora dos JPEGs FLIR. Dos 829
+registros com fotografia, 828 JPEGs foram localizados e todos possuem horário
+EXIF. Depois de normalizar provisoriamente o ano para 2025, 826 datas
+coincidiram com o EXIF. Foram encontradas duas divergências:
+
+- `FLIR1106`: planilha `01.02.2025`, EXIF `01.03.2025 18:25:42`;
+- `FLIR0689`: planilha `18.02.2025`, EXIF `19.02.2025 16:49:52`.
+
+A primeira é compatível com erro de mês na planilha. A segunda precisa ser
+confirmada, pois o mesmo animal já possui outra fotografia em 19 de fevereiro.
+`FLIR1107` continua ausente.
+
+Todos os 765 registros da coorte modelada têm EXIF. Nela, apenas a data de
+`FLIR1106` é alterada. O conjunto passa a possuir 23 datas reais de captura.
+
+Como fotografia e teste de monta parecem ter ocorrido na mesma sessão, dois
+alvos mais rigorosos foram avaliados:
+
+1. **próximo dia:** a fotografia atual é positiva somente se houver monta no
+   dia seguinte;
+2. **até 24 h pelo EXIF:** a monta positiva recebe provisoriamente o horário da
+   própria fotografia, e somente eventos estritamente futuros em até 24 horas
+   são considerados.
+
+O segundo alvo depende da confirmação de que a observação de monta e a
+fotografia realmente ocorreram juntas e em ordem comparável.
+
+### Monta somente no dia seguinte
+
+Existem 57 positivos em 765 registros, prevalência de 7,45%. Nas predições
+fora da amostra da regressão logística, promediadas entre repetições:
+
+| Grupo | Representação | PR-AUC | Faixa bootstrap | ROC-AUC | Faixa bootstrap |
+|---|---|---:|---:|---:|---:|
+| Animal | `15 x 15` | 0,125 | 0,081–0,197 | 0,653 | 0,577–0,738 |
+| Animal | Contraste quente | 0,129 | 0,078–0,211 | 0,669 | 0,592–0,747 |
+| Data | `15 x 15` | 0,133 | 0,075–0,197 | 0,661 | 0,558–0,753 |
+| Data | Contraste quente | 0,148 | 0,083–0,226 | 0,674 | 0,581–0,762 |
+
+A PR-AUC aleatória de referência é `0,0745`. Portanto, os atributos térmicos
+preservam alguma ordenação prospectiva. Entretanto, o melhor F1 médio foi
+`0,203` por animal e `0,118` por data. Ainda não há um limiar operacional
+estável.
+
+### Janela cronometrada de 24 horas
+
+Restaram apenas 27 positivos, prevalência de 3,53%. A ROI `15 x 15` com
+regressão logística teve:
+
+| Grupo | PR-AUC | Faixa bootstrap | ROC-AUC | Faixa bootstrap |
+|---|---:|---:|---:|---:|
+| Animal | 0,092 | 0,047–0,191 | 0,709 | 0,605–0,829 |
+| Data | 0,065 | 0,026–0,127 | 0,620 | 0,450–0,753 |
+
+O sinal observado em animais novos não foi confirmado entre datas: a faixa
+temporal de ROC-AUC inclui `0,5`. A janela exata deve ser mantida como
+sensibilidade exploratória, e não como resultado principal.
+
+### Interpretação atualizada
+
+Os resultados apoiam a existência de um sinal térmico prospectivo modesto,
+mas não um detector confiável. A próxima coleta deve aumentar o número de
+eventos, registrar o horário real da monta e reservar um período ou lote para
+validação externa. O plano completo está em
+[`roadmap_cientifico.md`](roadmap_cientifico.md).
+
 ## Reprodução
 
 Validação por animal:
@@ -301,11 +616,64 @@ Validação por data:
 Os parâmetros, folds, métricas, predições, auditoria das datas e comparações
 bootstrap ficam nos respectivos diretórios de saída.
 
+Experimento de `dia atual + dia seguinte`:
+
+```powershell
+.\venv\Scripts\python.exe src/avaliar_janela_24h.py
+.\venv\Scripts\python.exe src/bootstrap_janela_24h.py
+```
+
+As saídas ficam em `outputs/modeling_window_24h/`. `summary_metrics.csv`
+contém as médias dos folds, `split_audit.csv` documenta a separação dos dados
+e os dois arquivos `bootstrap_*.csv` registram as estimativas reamostradas.
+
+Auditoria EXIF e alvos prospectivos:
+
+```powershell
+.\venv\Scripts\python.exe src/auditar_timestamps_exif.py
+
+.\venv\Scripts\python.exe src/avaliar_janela_24h.py `
+  --targets mount_next_day mount_within_24h `
+  --groupings animal date `
+  --feature-sets poi fixed_15 hot_contrast `
+  --models logistic svm_rbf `
+  --timestamp-audit outputs/exif_timestamp_audit/timestamp_audit_records.csv
+```
+
+Experimento personalizado principal:
+
+```powershell
+.\venv\Scripts\python.exe src/avaliar_alerta_personalizado.py `
+  --models logistic svm_rbf
+```
+
+Comparação separada com boosting:
+
+```powershell
+.\venv\Scripts\python.exe src/avaliar_alerta_personalizado.py `
+  --models hist_gradient_boosting `
+  --bootstrap-iterations 0 `
+  --output-dir outputs/modeling_personalized_alert_hgb
+```
+
+As saídas principais ficam em `outputs/modeling_personalized_alert/`, incluindo
+métricas por fold, predições fora da amostra, bootstrap, eventos e ranking
+diário. O boosting fica no diretório informado no segundo comando.
+
 ## Próximos passos
 
-1. marcar os 61 POIs disponíveis e obter `FLIR1107`;
-2. confirmar o ano verdadeiro dos 137 registros sinalizados;
-3. regenerar todas as ROIs e repetir exatamente os dois bloqueios;
-4. obter uma coleta externa;
-5. manter `11 x 11` como análise principal e `15 x 15` como hipótese de
-   sensibilidade até existir validação independente.
+1. confirmar se o relógio da câmera estava deslocado e se foto/monta ocorreram
+   na mesma sessão;
+2. confirmar o tratamento de `FLIR0689`, `FLIR1106` e `FLIR1107`;
+3. anotar 120 máscaras anatômicas estratificadas, com 30 revisadas por um
+   segundo anotador;
+4. comparar ROI fixa, limiar térmico e segmentação somente contra essas
+   máscaras, sem consultar o rótulo de monta;
+5. realizar análise longitudinal alinhada ao evento, com efeito por animal e
+   controle de ambiente;
+6. manter “monta na próxima coleta” como alvo preditivo primário e a janela
+   EXIF de 24 h como sensibilidade;
+7. congelar atributos, algoritmo e limiar antes de uma nova coleta;
+8. coletar confirmação hormonal/ultrassonográfica em uma subcoorte;
+9. validar externamente em outro período ou lote e reportar calibração,
+   desempenho por evento e falsos alertas por 100 animal-dias.
